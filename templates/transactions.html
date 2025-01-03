@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Create Transaction</h2>
+<form method="POST" action="/transactions">
+    <label>Amount: <input type="text" name="amount"></label><br>
+    <button type="submit">Submit</button>
+</form>
+<a href="/logout">Logout</a>
+{% if session['is_admin'] %}
+<a href="/audit_logs">Check Audit Logs</a>
+<a href="/view_database">View Database</a>
+{% else %}
+<a href="/audit_logs">View Your Audit Logs</a>
+{% endif %}
+{% endblock %}
