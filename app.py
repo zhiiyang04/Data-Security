@@ -43,34 +43,29 @@ def register():
         username = request.form["username"]
         password = request.form["password"]
         email = request.form["email"]
+        secondary_password = request.form["secondary_password"]
 
-        # Validate the password
+        # Validate passwords
         validation_error = is_password_valid(password)
         if validation_error:
-            flash(validation_error, "danger")  # Feedback for invalid password
+            flash(validation_error, "danger")
+            return render_template("register.html")
+        
+        if not secondary_password or len(secondary_password) < 8:
+            flash("Secondary password must be at least 8 characters long.", "danger")
             return render_template("register.html")
 
-        # Hash the password
+        # Hash passwords
         hashed_password = bcrypt.generate_password_hash(password).decode("utf-8")
+        hashed_secondary_password = bcrypt.generate_password_hash(secondary_password).decode("utf-8")
 
         cursor = db.cursor()
         try:
             cursor.execute(
-                "INSERT INTO users (username, password, email) VALUES (%s, %s, %s)",
-                (username, hashed_password, email),
+                "INSERT INTO users (username, password, email, secondary_password) VALUES (%s, %s, %s, %s)",
+                (username, hashed_password, email, hashed_secondary_password),
             )
             db.commit()
-            new_user_id = cursor.lastrowid
-
-            # Log the user registration action
-            log_action(
-                db,
-                user_id=new_user_id,
-                action="USER REGISTERED",
-                table_name="users",
-                record_id=new_user_id,
-            )
-
             flash("Registration successful! Please log in.", "success")
             return redirect(url_for("login"))
         except pymysql.MySQLError as e:
@@ -105,57 +100,73 @@ def transactions():
     if "user_id" not in session:
         flash("Session expired. Please log in again.", "warning")
         return redirect(url_for("login"))
-    
-    user_id = session["user_id"]
-
-    # Check if the user is an admin
-    cursor = db.cursor()
-    cursor.execute("SELECT is_admin FROM users WHERE id = %s", (user_id,))
-    user = cursor.fetchone()
-    is_admin = user[0] if user else False
 
     if request.method == "POST":
+        secondary_password = request.form["secondary_password"]
         amount = request.form["amount"]
 
-        cursor.execute("INSERT INTO transactions (user_id, amount) VALUES (%s, %s)", (user_id, amount))
-        db.commit()
-        transaction_id = cursor.lastrowid
-        log_action(db, user_id=user_id, action="CREATE TRANSACTION", table_name="transactions", record_id=transaction_id)
-        return "Transaction created successfully."
+        cursor = db.cursor(pymysql.cursors.DictCursor)
+        cursor.execute("SELECT secondary_password FROM users WHERE id = %s", (session["user_id"],))
+        user = cursor.fetchone()
 
-    return render_template("transactions.html", is_admin=is_admin)
+        if user and bcrypt.check_password_hash(user["secondary_password"], secondary_password):
+            cursor.execute("INSERT INTO transactions (user_id, amount) VALUES (%s, %s)", (session["user_id"], amount))
+            db.commit()
+            log_action(db, session["user_id"], "CREATE TRANSACTION", "transactions")
+            flash("Transaction created successfully.", "success")
+        else:
+            flash("Invalid secondary password.", "danger")
+    
+    return render_template("transactions.html")
 
 
-@app.route("/audit_logs")
+
+@app.route("/audit_logs", methods=["GET", "POST"])
 def audit_logs():
     if "user_id" not in session:
-        return "session expired. Please log in.", 403
+        return redirect(url_for("login"))
 
-    cursor = db.cursor()
-    if session.get("is_admin", False):
-        # Admin sees all logs
-        query = """
-        SELECT audit_logs.id, users.username, audit_logs.action, audit_logs.table_name,
-               audit_logs.record_id, audit_logs.ip_address, audit_logs.timestamp
-        FROM audit_logs
-        LEFT JOIN users ON audit_logs.user_id = users.id
-        ORDER BY audit_logs.timestamp DESC;
-        """
-        cursor.execute(query)
-    else:
-        # Normal user sees only their logs
-        query = """
-        SELECT audit_logs.id, users.username, audit_logs.action, audit_logs.table_name,
-               audit_logs.record_id, audit_logs.ip_address, audit_logs.timestamp
-        FROM audit_logs
-        LEFT JOIN users ON audit_logs.user_id = users.id
-        WHERE audit_logs.user_id = %s
-        ORDER BY audit_logs.timestamp DESC;
-        """
-        cursor.execute(query, (session["user_id"],))
+    if request.method == "POST":
+        secondary_password = request.form["secondary_password"]
+        try:
+            cursor = db.cursor(pymysql.cursors.DictCursor)
+            cursor.execute("SELECT secondary_password, is_admin FROM users WHERE id = %s", (session["user_id"],))
+            user = cursor.fetchone()
 
-    logs = cursor.fetchall()
-    return render_template("audit_logs.html", logs=logs)
+            if user and bcrypt.check_password_hash(user["secondary_password"], secondary_password):
+                # Check if the user is an admin
+                if user["is_admin"]:
+                    # Admin can view all logs
+                    query = """
+                    SELECT audit_logs.id, users.username, audit_logs.action, audit_logs.table_name,
+                           audit_logs.record_id, audit_logs.ip_address, audit_logs.timestamp
+                    FROM audit_logs
+                    LEFT JOIN users ON audit_logs.user_id = users.id
+                    ORDER BY audit_logs.timestamp DESC;
+                    """
+                else:
+                    # Regular user can only view their own logs
+                    query = """
+                    SELECT audit_logs.id, users.username, audit_logs.action, audit_logs.table_name,
+                           audit_logs.record_id, audit_logs.ip_address, audit_logs.timestamp
+                    FROM audit_logs
+                    LEFT JOIN users ON audit_logs.user_id = users.id
+                    WHERE audit_logs.user_id = %s
+                    ORDER BY audit_logs.timestamp DESC;
+                    """
+                
+                cursor.execute(query, (session["user_id"],) if not user["is_admin"] else ())
+                logs = cursor.fetchall()
+                return render_template("audit_logs.html", logs=logs)
+
+            flash("Invalid secondary password.", "danger")
+        except Exception as e:
+            flash(f"An error occurred while fetching logs: {str(e)}", "danger")
+            return redirect(url_for("home"))
+
+    return render_template("secondary_password_prompt.html", action="view audit logs")
+
+
 
 @app.route("/view_database")
 def view_database():

@@ -59,11 +59,13 @@ def initialize_database():
         id INT AUTO_INCREMENT PRIMARY KEY,
         username VARCHAR(50) NOT NULL,
         password VARCHAR(255) NOT NULL,
+        secondary_password VARCHAR(255) NOT NULL,
         email VARCHAR(100) NOT NULL,
         is_admin BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     );
     """
+
 
     # SQL for creating the transactions table
     transactions = """
@@ -100,12 +102,15 @@ def initialize_database():
     result = cursor.fetchone()
     
     if result[0] == 0:
-        # Insert the preset admin user
-        admin_password = bcrypt.generate_password_hash("adminpassword").decode("utf-8")  # Example password
+        # Generate hashed passwords
+        admin_password = bcrypt.generate_password_hash("adminpassword").decode("utf-8")
+        admin_secondary_password = bcrypt.generate_password_hash("adminsecondary").decode("utf-8")  # Example secondary password
+
+        # Insert admin user with both passwords
         cursor.execute("""
-            INSERT INTO users (username, password, email, is_admin)
-            VALUES (%s, %s, %s, TRUE)
-        """, ("admin", admin_password, "admin@example.com"))
+            INSERT INTO users (username, password, secondary_password, email, is_admin)
+            VALUES (%s, %s, %s, %s, TRUE)
+        """, ("admin", admin_password, admin_secondary_password, "admin@example.com"))
         connection.commit()
         print("Admin user created successfully.")
 
